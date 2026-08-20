@@ -1,0 +1,133 @@
+# Table 4: Stability of GPT-5.5 extraction across three
+# repeated runs (development set)
+#
+#
+# For each moderator variable, this script compares the three
+# repeated extraction runs (Run 1, Run 2, Run 3) pairwise, using
+# Cohen's kappa for the single-value field (intervention_level_3)
+# and Jaccard similarity for the value-set fields (taxon_common,
+# sampling_method, control_type_level_1, control_type_level_2).
+# The three pairwise scores are then summarised as a mean and a
+# range (max - min) per field, matching Table 4.
+#
+# Input: run1, run2, run3 -- three data frames, one row per paper
+# (or per comparison row, matching however the field was originally
+# scored), same row order across all three, with columns for each
+# of the five moderator fields listed below.
+
+library(dplyr)
+library(tidyr)
+library(irr)
+
+FIELDS_KAPPA   <- "intervention_level_3"
+FIELDS_JACCARD <- c("control_type_level_1", "control_type_level_2",
+                     "taxon_common", "sampling_method")
+
+run1 <- read.csv("run1_results.csv", stringsAsFactors = FALSE)
+run2 <- read.csv("run2_results.csv", stringsAsFactors = FALSE)
+run3 <- read.csv("run3_results.csv", stringsAsFactors = FALSE)
+
+# 1. Jaccard similarity between two field values
+# Values are assumed to be semicolon-separated when a field can
+# hold more than one value (e.g. taxon_common, sampling_method).
+# 
+jaccard_similarity <- function(x, y) {
+  if (is.na(x)) x <- ""
+  if (is.na(y)) y <- ""
+
+  x_set <- trimws(unlist(strsplit(tolower(x), ";")))
+  y_set <- trimws(unlist(strsplit(tolower(y), ";")))
+  x_set <- unique(x_set[x_set != ""])
+  y_set <- unique(y_set[y_set != ""])
+
+  if (length(x_set) == 0 && length(y_set) == 0) return(1)
+
+  intersection <- length(intersect(x_set, y_set))
+  union_size   <- length(union(x_set, y_set))
+  if (union_size == 0) return(NA)
+
+  intersection / union_size
+}
+
+# ---------------------------------------------------------
+# 2. Mean Jaccard across all papers, between two runs
+# ---------------------------------------------------------
+mean_jaccard <- function(data1, data2, variable) {
+  scores <- mapply(jaccard_similarity, data1[[variable]], data2[[variable]])
+  mean(scores, na.rm = TRUE)
+}
+
+# 
+# 3. Cohen's kappa between two runs, for a single-value field
+# 
+calculate_kappa <- function(data1, data2, variable) {
+  tmp <- data.frame(
+    run_a = as.character(data1[[variable]]),
+    run_b = as.character(data2[[variable]])
+  )
+  tmp <- tmp[complete.cases(tmp), ]
+
+  all_levels <- union(unique(tmp$run_a), unique(tmp$run_b))
+  tmp$run_a <- factor(tmp$run_a, levels = all_levels)
+  tmp$run_b <- factor(tmp$run_b, levels = all_levels)
+
+  irr::kappa2(tmp, weight = "unweighted")$value
+}
+
+# 
+# 4. Pairwise scores for each moderator variable
+# 
+intervention_kappa <- c(
+  calculate_kappa(run1, run2, "intervention_level_3"),
+  calculate_kappa(run1, run3, "intervention_level_3"),
+  calculate_kappa(run2, run3, "intervention_level_3")
+)
+
+control1_jaccard <- c(
+  mean_jaccard(run1, run2, "control_type_level_1"),
+  mean_jaccard(run1, run3, "control_type_level_1"),
+  mean_jaccard(run2, run3, "control_type_level_1")
+)
+
+control2_jaccard <- c(
+  mean_jaccard(run1, run2, "control_type_level_2"),
+  mean_jaccard(run1, run3, "control_type_level_2"),
+  mean_jaccard(run2, run3, "control_type_level_2")
+)
+
+taxon_jaccard <- c(
+  mean_jaccard(run1, run2, "taxon_common"),
+  mean_jaccard(run1, run3, "taxon_common"),
+  mean_jaccard(run2, run3, "taxon_common")
+)
+
+sampling_jaccard <- c(
+  mean_jaccard(run1, run2, "sampling_method"),
+  mean_jaccard(run1, run3, "sampling_method"),
+  mean_jaccard(run2, run3, "sampling_method")
+)
+# 5. Assemble Table 4
+# Mean = average of the three pairwise scores
+# Range = max - min of the three pairwise scores
+
+table4 <- data.frame(
+  Moderator = c("intervention_level_3", "control_type_level_1",
+                "control_type_level_2", "taxon_common", "sampling_method"),
+  Metric = c("Cohen's kappa", "Jaccard", "Jaccard", "Jaccard", "Jaccard"),
+  Run1_vs_Run2 = c(intervention_kappa[1], control1_jaccard[1],
+                   control2_jaccard[1], taxon_jaccard[1], sampling_jaccard[1]),
+  Run1_vs_Run3 = c(intervention_kappa[2], control1_jaccard[2],
+                   control2_jaccard[2], taxon_jaccard[2], sampling_jaccard[2]),
+  Run2_vs_Run3 = c(intervention_kappa[3], control1_jaccard[3],
+                   control2_jaccard[3], taxon_jaccard[3], sampling_jaccard[3])
+)
+
+table4 <- table4 %>%
+  mutate(
+    Mean = rowMeans(select(., Run1_vs_Run2, Run1_vs_Run3, Run2_vs_Run3), na.rm = TRUE),
+    Range = apply(select(., Run1_vs_Run2, Run1_vs_Run3, Run2_vs_Run3), 1,
+                  function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+print(table4)
